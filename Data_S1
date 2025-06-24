@@ -1,0 +1,212 @@
+function GelSeg_V2beta01
+%
+%    Main Idea： To obtain high-feedback signal.
+%    Edited by Sun Jianing.   beta02  07:56 07/19/2022
+%                             beta03  08:09 07/19/2022
+%                             beta04  08:40 07/20/2022
+%              Version02      beta01  08:40 07/21/2022
+
+clear;
+close all;
+%%%% Data input
+S = load('Mdata207.mat');  %%% Cancer: Mdata107   Healthy: Mdata207
+MOrig = S.M;
+
+
+%%%%  show initialized result.  
+%%%%  1： Yes    0： No
+displayIni = 1;
+
+tic
+%%%% HDR suppressing %%%%%%%%%%%%%%%%
+M = log( MOrig+0.001 );
+MSh = zeros(size(M));
+for k = 1 : size(M,3)
+    MSh(:,:,k) = rescale( M(:,:,k) );
+end
+
+if displayIni
+    figure()
+    %montage( rescale(M) );
+    montage( MSh );
+    colormap(bone);
+end
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%  Tumor Judgement
+
+[ Tu1, Tu2, TuRoI ] = TuROI_extraction( M(:,:,2:3),MOrig );
+[ He1, He2, ~     ] = HeROI_extraction( M(:,:,6:7),MOrig );
+
+    function [ Tu1, Tu2, ROI ] = TuROI_extraction( M,MOrig )
+        for k = 1 : size(M,3)
+            MTemp = M(:,:,k);
+
+            MTemp = ( MTemp - mean( MTemp(:) )) ;
+            pd = fitdist(MTemp(:),'Normal');
+            MTemp = (MTemp - 2*pd.sigma);
+
+            MTemp = MTemp > 0;
+            M(:,:,k) = rescale( MTemp );
+        end
+        ROI = rescale(prod( M, 3 ));
+        %%%%%%%  compute energy of layers in the Region of Interest
+        ROIc = repmat(ROI,[1 1 size(MOrig,3)]);
+        MtM  = ROIc .* MOrig;
+        Tu1  = sum( MtM(:,:,2:3), 'all' )/sum( ROIc(:,:,2:3), 'all' );
+        Tu2  = sum( MtM(:,:,6:7), 'all' )/sum( ROIc(:,:,6:7), 'all' );
+        disp(['Tu1 of Healthy ROI from Layer2 to Layer3:  Tu1 = ' num2str(Tu1) ]);
+        disp(['Tu2 of Healthy ROI from Layer6 to Layer7:  Tu2 = ' num2str(Tu2) ]);
+    end
+
+    function [ He1, He2, ROI ] = HeROI_extraction( M,MOrig )
+        for k = 1 : size(M,3)
+            MTemp = M(:,:,k);
+
+            MTemp = ( MTemp - mean( MTemp(:) )) ;
+            MTemp = MTemp / min(abs(MTemp(:))+1e-6);
+
+            %MTemp = MTemp > 0;
+            MTemp = ( atan( MTemp ) + pi/2 )/(pi);
+            M(:,:,k) = rescale( MTemp );
+        end
+        ROI = rescale(prod( M, 3 ));
+        %%%%%%%  compute energy of layers in the Region of Interest
+        ROIc = repmat(ROI,[1 1 size(MOrig,3)]);
+        MtM  = ROIc .* MOrig;
+        He1  = sum( MtM(:,:,2:3), 'all' )/sum( ROIc(:,:,2:3), 'all' );
+        He2  = sum( MtM(:,:,6:7), 'all' )/sum( ROIc(:,:,6:7), 'all' );
+        disp(['He1 of Healthy ROI from Layer2 to Layer3:  He1 = ' num2str(He1) ]);
+        disp(['He2 of Healthy ROI from Layer6 to Layer7:  He2 = ' num2str(He2) ]);
+    end
+
+RP = He2-He1;
+RV = ( Tu1-Tu2 ) + RP;
+if RV > 0
+    disp( ' Tumor tissue is found. ');
+
+    %thresh = graythresh(TuRoI);
+    %TuRoI = double(imbinarize(TuRoI,thresh));
+    %thresh = graythresh(HeRoI);
+    %HeRoI = double(imbinarize(HeRoI,thresh));
+    
+    [ ~, ~, HeRoI ] = HeROI_extraction( M(:,:,5:7),MOrig );
+
+    TuRoI = TuEx_Coarse2Fine( M,TuRoI );
+
+    se  = strel('disk',1);    %%% 2 or 3   seD = strel('diamond',1);
+    TuRoI = imdilate( TuRoI,se );   %%% imclose imerode imdilate
+    seD = [ 0 1 0; 1 1 0; 0 0 0;];
+    %TuRoI = imerode( TuRoI,seD );
+
+    HeRoI = imclose( HeRoI,se );
+    HeRoI = imerode( HeRoI,seD );
+else
+    disp( ' There is no tumor tissue. ');
+    [ ~, ~, HeRoI ] = HeROI_extraction( M(:,:,5:7),MOrig );
+
+    TuRoI = zeros(size(TuRoI));
+    se    = strel('disk',1);    %%% 2 or 3   seD = strel('diamond',1);
+    HeRoI = imclose( HeRoI,se );      %%% imclose imerode imdilate
+end
+
+
+    function TuRoI = TuEx_Coarse2Fine( OrigM,TRoI )
+
+        %%%%% Tumor Area
+        PM = OrigM( :,:,2:4 );
+        for k = 1 : size(PM,3)
+            MTemp = PM(:,:,k);
+
+            MTemp = ( MTemp - mean( MTemp(:) )) ;
+            MTemp = MTemp / min(abs(MTemp(:))+1e-6);
+
+            MTemp = atan( MTemp );
+            PM(:,:,k) = rescale( MTemp );
+        end
+        TuRoI = rescale(prod( PM, 3 ));
+        se    = strel('disk',1);    %%% 2 or 3   seD = strel('diamond',1);
+        TuRoI = imerode( TuRoI,se );   %%% imclose imerode imdilate
+        TuRoI = TuRoI + TRoI;
+        TuRoI( TuRoI>1 ) = 1;
+    end
+toc
+
+%%%%%%   Healthy tissue： Green
+%%%%%%   Tumor   tissue： Green
+%%%%%%   palette : each column defines a color
+palette = [ 1 0 1;
+            1 1 1;
+            0 1 1];
+BW1 = draw4shown( M,TuRoI, HeRoI, palette);
+
+
+%%%%% Edge Extraction
+if RV > 0
+    Ms  = imresize( BW1, [120 120],'bicubic' );
+    [~,threshold] = edge(Ms,'sobel');
+    fudgeFactor = 0.8;
+    BWs = edge(Ms,'sobel',threshold * fudgeFactor);
+
+    figure();
+    montage( BWs );
+    axis off; axis tight;
+    colormap(bone);
+end
+
+
+end
+
+%%%%%%%%%%%%%
+%
+%
+%
+%
+%
+%%%%%%%%
+function BW1 = draw4shown( M,tumorROI, healthROI, palette)
+
+thresh = graythresh(tumorROI);
+BW1 = double(imbinarize(tumorROI,thresh));
+thresh = graythresh(healthROI);
+BW2 = double(imbinarize(healthROI,thresh));
+BW  = BW1 + BW2 * 0.5;
+BW( BW>1 ) = 1;
+
+%%%% Colorized Mask : RGB color
+Mask = zeros([size(BW) 3]);
+MaskTemp = Mask( :,:,1 );
+MaskTemp( BW ==1 )   = palette(1,1); 
+MaskTemp( BW ==0.5 ) = palette(1,2); 
+MaskTemp( BW ==0 )   = palette(1,3); Mask( :,:,1 ) = MaskTemp;
+MaskTemp = Mask( :,:,2 );
+MaskTemp( BW ==1 )   = palette(2,1); 
+MaskTemp( BW ==0.5 ) = palette(2,2); 
+MaskTemp( BW ==0 )   = palette(2,3); Mask( :,:,2 ) = MaskTemp;
+MaskTemp = Mask( :,:,3 );
+MaskTemp( BW ==1 )   = palette(3,1); 
+MaskTemp( BW ==0.5 ) = palette(3,2); 
+MaskTemp( BW ==0 )   = palette(3,3); Mask( :,:,3 ) = MaskTemp;
+
+%%%% Select several Layers for examples
+LayersSelected = 1 : 7;
+c = min(4,length(LayersSelected)+1);
+r = 1 + double(max(LayersSelected+1) > c);
+figure();
+subplot(r,c,1);
+imshow(Mask);
+for k = LayersSelected
+    Mt = rescale(M(:,:,k));
+    Mt = repmat( Mt,[1 1 3] ) .* Mask;
+    subplot(r,c,k+1);
+    imshow(Mt);
+end
+end
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+

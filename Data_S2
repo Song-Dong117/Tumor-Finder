@@ -1,0 +1,19 @@
+function MatDataGen
+% MatDataGen
+%  生成 Mat 文件
+
+clear;
+close all;
+
+%%%%%
+layerk = 7; %% 数据层数
+
+
+for k = 1 : layerk
+    Mtemp    = readmatrix( ['layer' num2str(k) '.txt']);
+    M(:,:,k) = Mtemp( 2:end,2:end );
+end
+save Mdata.mat M;
+
+end
+
